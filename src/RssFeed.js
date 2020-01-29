@@ -3,9 +3,8 @@
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {Feed} from 'feed';
-import idx from 'idx';
 import graphql from 'babel-plugin-relay/macro';
-import {environment} from './Environment';
+import {createEnvironment, recordSource} from './Environment';
 import {fetchQuery} from 'react-relay';
 import {computePostDate, postPath} from './Post';
 import {RssMarkdownRenderer} from './MarkdownRenderer';
@@ -24,6 +23,7 @@ const feedQuery = graphql`
     @persistedQueryConfiguration(
       accessToken: {environmentVariable: "OG_GITHUB_TOKEN"}
       fixedVariables: {environmentVariable: "REPOSITORY_FIXED_VARIABLES"}
+      cacheSeconds: 300
     ) {
     gitHub {
       repository(name: $repoName, owner: $repoOwner) {
@@ -85,13 +85,14 @@ export async function buildFeed({
   basePath?: ?string,
   siteHostname?: ?string,
 }) {
+  const environment = createEnvironment(recordSource, null, null);
   const data: RssFeed_QueryResponse = await fetchQuery(
     environment,
     feedQuery,
     {},
   );
 
-  const posts = idx(data, _ => _.gitHub.repository.issues.nodes) || [];
+  const posts = data.gitHub?.repository?.issues.nodes || [];
   const latestPost = posts[0];
 
   const baseUrl = removeTrailingSlash(

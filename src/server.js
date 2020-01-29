@@ -12,10 +12,12 @@ import {fetchQuery} from 'react-relay';
 import {createEnvironment} from './Environment';
 import serialize from 'serialize-javascript';
 import {RecordSource} from 'relay-runtime';
-import RelayQueryResponseCache from './relayResponseCache';
+import PreloadCacheContext from './PreloadCacheContext';
+import PreloadCache from './preloadQueryCache';
 import {buildFeed} from './RssFeed';
 import {imageProxy, firstFrame} from './imageProxy';
 import {Helmet} from 'react-helmet';
+import config from './config';
 
 // $FlowFixMe
 const assets = require(process.env.RAZZLE_ASSETS_MANIFEST);
@@ -125,14 +127,10 @@ function createApp(basePath: ?string) {
     .get('/*', async (req, res) => {
       try {
         const recordSource = new RecordSource();
-        const cache = new RelayQueryResponseCache({
-          size: 250,
-          ttl: 1000 * 60 * 10,
-        });
 
         let accessToken;
         try {
-          const cookie = req.cookies[process.env.RAZZLE_ONEGRAPH_APP_ID];
+          const cookie = req.cookies[config.appId];
           if (cookie) {
             accessToken = JSON.parse(cookie).accessToken;
           }
@@ -140,20 +138,26 @@ function createApp(basePath: ?string) {
           console.error('Error parsing cookie', e);
         }
 
+        const cache = new PreloadCache({size: 10, ttl: 1000 * 60 * 60});
         const environment = createEnvironment(
           recordSource,
-          cache,
           accessToken ? {Authorization: `Bearer ${accessToken}`} : null,
+          cache,
         );
 
         // Prep cache
         const match = pick(routes, req.url);
         if (match) {
-          await fetchQuery(
-            environment,
-            match.route.query,
-            match.route.getVariables(match.params),
-          );
+          await new Promise((resolve, reject) => {
+            match.route
+              .preload(cache, environment, match.params)
+              .source.subscribe({
+                complete: () => {
+                  resolve();
+                },
+                error: e => reject(e),
+              });
+          });
         }
 
         const sheet = new ServerStyleSheet();
@@ -161,7 +165,9 @@ function createApp(basePath: ?string) {
         const markup = renderToString(
           sheet.collectStyles(
             <ServerLocation url={req.url}>
-              <App environment={environment} basepath={basePath || '/'} />
+              <PreloadCacheContext.Provider value={cache}>
+                <App environment={environment} basepath={basePath || '/'} />
+              </PreloadCacheContext.Provider>
             </ServerLocation>,
           ),
         );
